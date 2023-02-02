@@ -1,0 +1,262 @@
+---
+title: "Harmonization of the Northwest Water Database"
+author: "B Steele"
+date: "2023-02-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(stringr)
+library(tidyverse)
+library(ggthemes)
+
+data_dir = 'data/waterQuality'
+```
+
+# Purpose
+
+This script is meant to summarize data availability, given Northern Water's database from manual sampling.
+
+## Format the data set
+
+```{r}
+wq = read.csv(file.path(data_dir, 'WQData_20221118_081620.csv'))
+```
+
+First, lets deal with the datetime stamp and split into date and time (no one is actually taking measurements at midnight!)
+
+```{r}
+wq <- wq %>%
+  dplyr::mutate(datetime = as.POSIXct(Date.Time, format = '%m/%d/%Y %I:%M:%S %p', tz = 'UTC'),#let's just store as UTC for the time being, as to not assume DST
+         date = as.Date(format(datetime, '%Y-%m-%d')),
+         time = format(datetime, '%H:%M:%S')) %>% 
+  dplyr::mutate(time = ifelse(time == '00:00:00', NA_character_, time))
+```
+
+Next, we'll harmonize some of the other columns that are important for our analysis. First, we'll separate integrated samples (those with '-' in the depth that come from Composite and Tubing sample types from grab samples, listed here as Point, Grab, or VanDorn.
+
+```{r}
+wq <- wq %>% 
+  dplyr::mutate(Depth = ifelse(Depth=='{N/A}', '', Depth)) %>% 
+  dplyr::filter(str_starts(pattern = '-', string = Depth, negate = T)) %>% #Filter out negtive depths (these are presumed to be data that are obtained out of water)
+  dplyr::mutate(depth_start = ifelse(grepl('-', Depth), str_split(Depth, '-')[[1]], Depth),
+         depth_end = ifelse(grepl('-', Depth), str_split(Depth, '-')[[2]], Depth))
+
+```
+
+And now to deal with 'bottom' and 'surface' in the depth columns:
+
+```{r}
+wq <- wq %>% 
+  dplyr::mutate(depth_surface = ifelse(grepl('surface', Depth, ignore.case = T),
+                                       'y',
+                                       ''),
+                depth_bottom = ifelse(grepl('bottom', Depth, ignore.case = T),
+                                      'y',
+                                      ''),
+                depth_start = ifelse(grepl('surface', depth_start, ignore.case = T),                               '0.1',
+                              depth_start),
+                depth_end = ifelse(grepl('surface', depth_end, ignore.case = T),
+                            '0.1',
+                            depth_end),
+                depth_start = ifelse(grepl('bottom', depth_start, ignore.case = T),
+                              '999',
+                              depth_start),
+                depth_end = ifelse(grepl('bottom', depth_end, ignore.case = T),
+                              '999',
+                              depth_end)) %>% 
+  dplyr::mutate(depth_start = as.numeric(depth_start),
+         depth_end = as.numeric(depth_end))
+```
+
+## Subset the data set
+
+First, let's look at the unique variable names:
+
+```{r}
+parameters = unique(wq$Constituent)
+parameters
+```
+
+Most of these things, we don't care about, let's remove all the 'Density', 'Biovolume', and '#/L' variables from this list.
+
+```{r}
+parameters = str_subset(parameters, 'Density', negate = T) %>%
+  str_subset(., 'Denisty', negate = T) %>%
+  str_subset(., 'density', negate = T) %>%
+  str_subset(., 'Biovolume', negate = T) %>%
+  str_subset(., 'biovolume', negate = T) %>%
+  str_subset(., '#/L', negate = T)
+```
+
+This is better and a more manageable list of parameters. Let's grab only this smaller suite of parameters from the primary file.
+
+```{r}
+wq_sub <- wq[wq$Constituent %in% parameters,]
+```
+
+And now, let's drop a few columns that are not applicable (these were only applicable to the species-level data).
+
+```{r}
+wq_sub <- wq_sub %>% select(-c(Constituent.Group, Constituent.Species, X))
+```
+
+And drop the columns that we've reformatted.
+
+```{r}
+wq_sub <- wq_sub %>% select(-c(Date.Time, Depth))
+```
+
+Now we can see the parameters we care about.
+
+```{r}
+chlorophyll <- wq_sub %>% 
+  dplyr::filter(grepl(pattern = 'Chloroph', Constituent, ignore.case = T) |
+                  grepl(pattern = 'Pheo', Constituent, ignore.case = T))
+
+secchi<- wq_sub %>% filter(grepl('secchi', Constituent, ignore.case = T))
+
+waterTemp <- wq_sub %>% dplyr::filter(grepl('Temp', Constituent, ignore.case = T) & !grepl('Air', Constituent, ignore.case = T))
+
+turbidity <- wq_sub %>% dplyr::filter(grepl('turb', Constituent, ignore.case = T))
+
+tss <- wq_sub %>% dplyr::filter(grepl('tss', Constituent, ignore.case = T))
+
+```
+
+## Chlorophyll harmonization
+
+First, let's get rid of outliers, samples flagged as 'suspect', and recode BDL to half DL.
+
+```{r}
+chlorophyll <- chlorophyll %>%
+  #drop the 10k failed samples
+  dplyr::filter(Lab.Value <1000) %>% 
+  #drop the suspect samples
+  dplyr::filter(!grepl('suspect', Flag, ignore.case = T)) %>% 
+  #drop those that do not conform to lab handling procedures
+  dplyr::filter(!grepl('properly preserved', Flag, ignore.case = T) & !grepl('past holding', Flag, ignore.case = T) | !grepl('exceeded', Flag, ignore.case = T)) %>% 
+  #add flag and recode to half RL that are noted as below RL
+  dplyr::mutate(BDL = ifelse(grepl('reporting value', Flag, ignore.case = T), 
+                      'y',
+                      ''),
+         Lab.Value = ifelse(BDL == 'y', 0.5*RL, Lab.Value)) %>% 
+  #flag and recode those that are not commented, but are reported as BDL
+  mutate(BDL = ifelse(Lab.Value < RL, 'y', BDL),
+         Lab.Value = ifelse(!is.na(RL),
+                            ifelse(Lab.Value < RL, 0.5*RL, Lab.Value), 
+                            Lab.Value))
+  
+```
+
+The chlorophyll data set contains a bunch of parameters, for the time being, we're just going to grab the chlorophyll-a data.
+
+```{r}
+chla <- chlorophyll %>% dplyr::filter(Constituent == 'Chlorophyll a (mg/m3)')
+
+```
+
+For kicks, let's just look at the data:
+
+```{r}
+ggplot(chla, aes(x = date, y = Lab.Value, color = depth_start, shape = Sample.Type)) +
+  geom_point() +
+  facet_grid(Feature ~ ., scales = 'free_y') +
+  theme_bw()
+```
+
+Chlorophyll a was measured through 2015... so let's look at some other constituents to see what happened...
+
+```{r}
+#'corrected' chla
+chlorophyll %>%
+  dplyr::filter(Constituent == '(Corrected) Chlorophyll a (mg/m3)') %>% 
+  ggplot(., aes(x = date, y = Lab.Value, color = depth_start, shape = Sample.Type)) +
+  geom_point() +
+  facet_grid(Feature ~ ., scales = 'free_y') +
+  theme_bw() +
+  labs(title = '(Corrected) Chlorophyll a')
+
+```
+
+We might be able to piece together Corrected Chlorophyll-a and Corrected Pheophytin-a to have a relatively equitable measure of chlorophyll a to the data previous to 2015.
+
+```{r}
+
+```
+
+## Temperature harmonization
+
+The water temperature data don't need a lot of harmonization. There are some flags and remarks, but they are related to depth accuracy, so we'll just leave it as is. All start and end depths are the same, so we'll only retain one column. We'll keep the indications of bottom/surface since those are our indication that we made some assumptions about the depth of the measurement. Here, we'll just reorder and rename columns and export the file.
+
+```{r}
+colnames(waterTemp) = tolower(colnames(waterTemp))
+
+waterTemp <- waterTemp %>% 
+  select(feature,
+         station,
+         date,
+         time,
+         parameter = constituent,
+         depth = depth_start,
+         value = lab.value,
+         depth_surface,
+         depth_bottom)
+
+write.csv(waterTemp, 
+          file.path(data_dir, paste0('NASA-NW_waterTemp_data_v', Sys.Date())), 
+          row.names = F)
+```
+
+And a reality check:
+
+```{r}
+waterTemp %>% 
+  filter(depth < 999) %>% 
+  ggplot(., aes(x = date, y = value, color = depth)) +
+  geom_point() +
+  facet_grid(feature ~ ., scales = 'free_y') +
+  theme_bw() 
+```
+
+## Secchi
+
+Add a flag column for bottom hits per Flag column.
+
+```{r}
+secchi <- secchi %>% 
+  dplyr::mutate(bottom = ifelse(grepl('bottom', Flag, ignore.case = T) | 
+                                  grepl('bottom', Remark, ignore.case = T),
+                                'y',
+                                ''))
+```
+
+Harmonize column names and export.
+
+```{r}
+colnames(secchi) = tolower(colnames(secchi)) 
+
+secchi <- secchi %>% 
+  select(feature, 
+         station, 
+         date, 
+         time, 
+         parameter = constituent, 
+         value = lab.value, 
+         bottom)
+
+write.csv(secchi, 
+          file.path(data_dir, paste0('NASA-NW_Secchi_data_v', Sys.Date())), 
+          row.names = F)
+```
+
+And we'll do an sanity check:
+
+```{r}
+ggplot(secchi, aes(x = date, y = value, color = bottom)) +
+  geom_point() +
+  facet_grid(feature ~ ., scales = 'free_y') +
+  theme_bw() +
+  scale_color_colorblind()
+```
