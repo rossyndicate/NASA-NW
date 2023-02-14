@@ -1,0 +1,23 @@
+---
+title: "Grab all NW database sampling locations"
+author: "B Steele"
+date: "2023-01-31"
+output: html_document
+---
+
+# Purpose
+
+This script summarizes the Norther Water historical data to grab all of the unique sampling locations for build out of the Landsat C2 pipeline and for any other future use.
+
+``` {r setup, include = F}
+library(tidyverse)
+data_dir = 'data/waterQuality'
+```
+
+## Load database
+
+``` {r}
+wq = read.csv(file.path(data_dir, 'WQData_20221118_081620.csv'))
+```
+
+
