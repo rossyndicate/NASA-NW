@@ -418,14 +418,14 @@ def RefPull89(image):
   f = cfMask(image).select('cfmask')
   # process image with st SR cloud mask
   a = srAerosol(image).select('medHighAero')
-  # where the f mask is >= 1 (clouds and cloud shadow), call that 1 (otherwise 0) and rename as clouds.
+  # where the f mask is >= 1 (clouds,cloud shadow, snow), call that 1 (otherwise 0) and rename as clouds.
   clouds = f.gte(1).rename('clouds')
   #apply dswe function
   d = DSWE(image).select('dswe')
   #where dswe is equal to one, call it one, rename to dswe1 and mask with QA filters
-  dswe1 = image.select(['Blue'],['dswe1']).updateMask(d.eq(1)).updateMask(f.eq(0)).updateMask(r.eq(1)).selfMask()
+  dswe1 = d.eq(1).rename('dswe1').updateMask(f.eq(0)).updateMask(r.eq(1)).selfMask()
   # band where dswe is 3 and apply all masks
-  dswe3 = image.select(['Blue'],['dswe3']).updateMask(d.eq(3)).updateMask(f.eq(0)).updateMask(r.eq(1)).selfMask()
+  dswe3 = d.eq(3).rename('dswe3').updateMask(f.eq(0)).updateMask(r.eq(1)).selfMask()
   #calculate hillshade
   h = CalcHillShades(image, tile.geometry()).select('hillShade')
   #calculate hillshadow
@@ -453,8 +453,7 @@ def RefPull89(image):
             .updateMask(f.eq(0)) #no clouds or snow
             .addBands(clouds) #after masking, add clouds
             .addBands(dswe1) #add dswe1
-            .addBands(dswe3) #and add dswe3
-            .addBands(d))
+            .addBands(dswe3)) #and add dswe3
             
   combinedReducer = (ee.Reducer.median().unweighted().forEachBand(pixOut.select(['med_Aerosol','med_Blue', 'med_Green', 'med_Red', 'med_Nir', 'med_Swir1', 'med_Swir2', 'med_SurfaceTemp', 'med_temp_qa']))
   .combine(ee.Reducer.min().unweighted().forEachBand(pixOut.select(['min_Aerosol','min_Blue', 'min_Green', 'min_Red', 'min_Nir', 'min_Swir1', 'min_Swir2', 'min_SurfaceTemp', 'min_temp_qa', 'min_cloud_dist'])), sharedInputs = False)
@@ -464,7 +463,7 @@ def RefPull89(image):
   .combine(ee.Reducer.stdDev().unweighted().forEachBand(pixOut.select(['sd_Aerosol','sd_Blue', 'sd_Green', 'sd_Red', 'sd_Nir', 'sd_Swir1', 'sd_Swir2', 'sd_SurfaceTemp', 'sd_temp_qa'])), sharedInputs = False)
   .combine(ee.Reducer.mean().unweighted().forEachBand(pixOut.select(['mean_Aerosol','mean_Blue', 'mean_Green', 'mean_Red', 'mean_Nir', 'mean_Swir1', 'mean_Swir2', 'mean_SurfaceTemp', 'mean_temp_qa', 'mean_cloud_dist'])), sharedInputs = False)
   .combine(ee.Reducer.kurtosis().unweighted().forEachBand(pixOut.select(['SurfaceTemp'])), outputPrefix = 'kurt_', sharedInputs = False)
-  .combine(ee.Reducer.count().unweighted().forEachBand(pixOut.select(['Aerosol','Blue', 'Green', 'Red', 'Nir', 'Swir1', 'Swir2','SurfaceTemp', 'dswe', 'dswe1', 'dswe3', 'clouds'])), outputPrefix = 'pCount_', sharedInputs = False)
+  .combine(ee.Reducer.count().unweighted().forEachBand(pixOut.select(['Aerosol','Blue', 'Green', 'Red', 'Nir', 'Swir1', 'Swir2','SurfaceTemp', 'dswe1', 'dswe3', 'clouds'])), outputPrefix = 'pCount_', sharedInputs = False)
   #.combine(ee.Reducer.sum().unweighted().forEachBand(pixOut.select(['dswe1', 'dswe3'])), outputPrefix = 'pCount_', sharedInputs = False)
   .combine(ee.Reducer.mean().unweighted().forEachBand(pixOut.select(['hillShadow', 'medHighAero'])), outputPrefix = 'prop_', sharedInputs = False))
   # Collect median reflectance and occurance values
@@ -543,7 +542,7 @@ for tiles in pr:
                                           #'Q3_Aerosol','Q3_Blue', 'Q3_Green', 'Q3_Red', 'Q3_Nir', 'Q3_Swir1', 'Q3_Swir2', 'Q3_SurfaceTemp',
                                           'sd_Aerosol','sd_Blue', 'sd_Green', 'sd_Red', 'sd_Nir', 'sd_Swir1', 'sd_Swir2', 'sd_SurfaceTemp', 'sd_temp_qa',
                                           'pCount_Aerosol','pCount_Blue', 'pCount_Green', 'pCount_Red', 'pCount_Nir', 'pCount_Swir1', 'pCount_Swir2', 'pCount_SurfaceTemp',
-                                          'kurt_SurfaceTemp', 'prop_clouds','prop_medHighAero','prop_hillShadow','pCount_dswe', 'pCount_dswe1', 'pCount_dswe3', 'min_cloud_dist', 'mean_cloud_dist','system:index']))
+                                          'kurt_SurfaceTemp', 'prop_clouds','prop_medHighAero','prop_hillShadow', 'pCount_dswe1', 'pCount_dswe3', 'min_cloud_dist', 'mean_cloud_dist','system:index']))
   
   #Check how many existing tasks are running and take a break of 120 secs if it's >25 
   maximum_no_of_tasks(10, 120)
@@ -577,8 +576,8 @@ for tiles in pr:
                                           selectors = ['med_Aerosol','med_Blue', 'med_Green', 'med_Red', 'med_Nir', 'med_Swir1', 'med_Swir2', 'med_SurfaceTemp', 'med_temp_qa',
                                           'min_Aerosol','min_Blue', 'min_Green', 'min_Red', 'min_Nir', 'min_Swir1', 'min_Swir2', 'min_SurfaceTemp', 'min_temp_qa',
                                           'max_Aerosol','max_Blue', 'max_Green', 'max_Red', 'max_Nir', 'max_Swir1', 'max_Swir2', 'max_SurfaceTemp', 'max_temp_qa',
-                                          'Q1_Aerosol','Q1_Blue', 'Q1_Green', 'Q1_Red', 'Q1_Nir', 'Q1_Swir1', 'Q1_Swir2', 'Q1_SurfaceTemp',
-                                          'Q3_Aerosol','Q3_Blue', 'Q3_Green', 'Q3_Red', 'Q3_Nir', 'Q3_Swir1', 'Q3_Swir2', 'Q3_SurfaceTemp',
+                                          #'Q1_Aerosol','Q1_Blue', 'Q1_Green', 'Q1_Red', 'Q1_Nir', 'Q1_Swir1', 'Q1_Swir2', 'Q1_SurfaceTemp',
+                                          #'Q3_Aerosol','Q3_Blue', 'Q3_Green', 'Q3_Red', 'Q3_Nir', 'Q3_Swir1', 'Q3_Swir2', 'Q3_SurfaceTemp',
                                           'sd_Aerosol','sd_Blue', 'sd_Green', 'sd_Red', 'sd_Nir', 'sd_Swir1', 'sd_Swir2', 'sd_SurfaceTemp', 'sd_temp_qa',
                                           'pCount_Aerosol','pCount_Blue', 'pCount_Green', 'pCount_Red', 'pCount_Nir', 'pCount_Swir1', 'pCount_Swir2', 'pCount_SurfaceTemp',
                                           'kurt_SurfaceTemp', 'pCount_clouds','prop_medHighAero','prop_hillShadow','pCount_dswe1', 'pCount_dswe3', 'min_cloud_dist', 'mean_cloud_dist','system:index']))

@@ -218,7 +218,7 @@ if len(pr) <= 5 :
 ```{python}
 ## Buffer the lake sites
 def dpBuff(i):
-  return i.buffer(100) #doing a 100m buffer for general use
+  return i.buffer(90) #doing a 90m buffer for general use
 
 ```
 
@@ -316,8 +316,8 @@ def DSWE(i):
   ndvi = Ndvi(i)
   blue = i.select(['Blue'])
   swir2 = i.select(['Swir2'])
-  # These thresholds are taken from the LS Collection 2 DSWE Data Format Control Book:
-  # (https:#d9-wret.s3.us-west-2.amazonaws.com/assets/palladium/production/s3fs-public/media/files/LSDS-2042_LandsatC2_L3_DSWE_DFCB-v2.pdf)
+  
+  # The folowing thresholds are taken from the LS Collection 2 DSWE Data Format Control Book
   # Inputs are meant to be scaled reflectance values 
   t1 = mndwi.gt(0.124) # MNDWI greater than Wetness Index Threshold
   t2 = mbsrv.gt(mbsrn) # MBSRV greater than MBSRN
@@ -331,11 +331,13 @@ def DSWE(i):
    .And(swir1.lt(0.3)) #3000 for no scaling (LS Collection 1)
    .And(swir2.lt(0.1)) #1000 for no scaling (LS Collection 1)
    .And(nir.lt(0.25))) #2500 for no scaling (LS Collection 1)
+   
   t = (t1
     .add(t2.multiply(10))
     .add(t3.multiply(100))
     .add(t4.multiply(1000))
     .add(t5.multiply(10000)))
+    
   noWater = (t.eq(0)
     .Or(t.eq(1))
     .Or(t.eq(10))
@@ -368,11 +370,13 @@ def DSWE(i):
     .Or(t.eq(10001))
     .Or(t.eq(10010))
     .Or(t.eq(10100)))
+    
   iDswe = (noWater.multiply(0)
     .add(hWater.multiply(1))
     .add(mWater.multiply(2))
     .add(pWetland.multiply(3))
     .add(lWater.multiply(4)))
+    
   return iDswe.rename('dswe')
 
 ```
@@ -381,7 +385,7 @@ def DSWE(i):
 
 ```{python}
 def CalcHillShades(image, geo):
-  MergedDEM = ee.Image("users/eeProject/MERIT").clip(geo.buffer(300))
+  MergedDEM = ee.Image("users/eeProject/MERIT").clip(geo.buffer(3000))
   hillShade = ee.Terrain.hillshade(MergedDEM, 
     ee.Number(image.get('SUN_AZIMUTH')), 
     ee.Number(image.get('SUN_ELEVATION')))
@@ -425,16 +429,16 @@ def RefPull457(image):
   # process image with st SR cloud mask
   s = srCloudMask(image).select('sr_cloud')
   # where the f mask is > 2 (clouds and cloud shadow), call that 1 (otherwise 0) and rename as clouds.
-  clouds = f.gt(1).rename('clouds')
+  clouds = f.gte(1).rename('clouds')
   #apply dswe function
   d = DSWE(image).select('dswe')
-  d1 = d.eq(1).rename('dswe1').selfMask().updateMask(f.eq(0)).updateMask(s.eq(0)).updateMask(r.eq(1))
+  dswe1 = d.eq(1).rename('dswe1').updateMask(f.eq(0)).updateMask(s.eq(0)).updateMask(r.eq(1)).selfMask()
+  # band where dswe is 3 and apply all masks
+  dswe3 = d.eq(3).rename('dswe3').updateMask(f.eq(0)).updateMask(s.eq(0)).updateMask(r.eq(1)).selfMask()
   #calculate hillshade
   h = CalcHillShades(image, tile.geometry()).select('hillShade')
   #calculate hillshadow
   hs = CalcHillShadows(image, tile.geometry()).select('hillShadow')
-  # band where dswe is 3 and apply all masks
-  dswe3 = d.eq(3).rename('dswe3').selfMask().updateMask(f.eq(0)).updateMask(s.eq(0)).updateMask(r.eq(1))
   pixOut = (image.select(['Blue', 'Green', 'Red', 'Nir', 'Swir1', 'Swir2', 'SurfaceTemp', 'temp_qa'])
             # make some dummy bands for the reducer
             .addBands(image.select(['Blue', 'Green', 'Red', 'Nir', 'Swir1', 'Swir2', 'SurfaceTemp', 'temp_qa'],
@@ -443,32 +447,32 @@ def RefPull457(image):
             ['min_Blue', 'min_Green', 'min_Red', 'min_Nir', 'min_Swir1', 'min_Swir2', 'min_SurfaceTemp', 'min_temp_qa', 'min_cloud_dist']))
             .addBands(image.select(['Blue', 'Green', 'Red', 'Nir', 'Swir1', 'Swir2', 'SurfaceTemp', 'temp_qa'],
             ['max_Blue', 'max_Green', 'max_Red', 'max_Nir', 'max_Swir1', 'max_Swir2', 'max_SurfaceTemp', 'max_temp_qa']))
-            .addBands(image.select(['Blue', 'Green', 'Red', 'Nir', 'Swir1', 'Swir2', 'SurfaceTemp'],
-            ['Q1_Blue', 'Q1_Green', 'Q1_Red', 'Q1_Nir', 'Q1_Swir1', 'Q1_Swir2', 'Q1_SurfaceTemp']))
-            .addBands(image.select(['Blue', 'Green', 'Red', 'Nir', 'Swir1', 'Swir2', 'SurfaceTemp'],
-            ['Q3_Blue', 'Q3_Green', 'Q3_Red', 'Q3_Nir', 'Q3_Swir1', 'Q3_Swir2', 'Q3_SurfaceTemp']))
+            #.addBands(image.select(['Blue', 'Green', 'Red', 'Nir', 'Swir1', 'Swir2', 'SurfaceTemp'],
+            #['Q1_Blue', 'Q1_Green', 'Q1_Red', 'Q1_Nir', 'Q1_Swir1', 'Q1_Swir2', 'Q1_SurfaceTemp']))
+            #.addBands(image.select(['Blue', 'Green', 'Red', 'Nir', 'Swir1', 'Swir2', 'SurfaceTemp'],
+            #['Q3_Blue', 'Q3_Green', 'Q3_Red', 'Q3_Nir', 'Q3_Swir1', 'Q3_Swir2', 'Q3_SurfaceTemp']))
             .addBands(image.select(['Blue', 'Green', 'Red', 'Nir', 'Swir1', 'Swir2', 'SurfaceTemp', 'temp_qa'],
             ['sd_Blue', 'sd_Green', 'sd_Red', 'sd_Nir', 'sd_Swir1', 'sd_Swir2', 'sd_SurfaceTemp', 'sd_temp_qa']))
             .addBands(image.select(['Blue', 'Green', 'Red', 'Nir', 'Swir1', 'Swir2', 'SurfaceTemp', 'temp_qa','ST_CDIST'],
             ['mean_Blue', 'mean_Green', 'mean_Red', 'mean_Nir', 'mean_Swir1', 'mean_Swir2', 'mean_SurfaceTemp', 'mean_temp_qa', 'mean_cloud_dist']))
             .addBands(hs)
-            .updateMask(d.eq(1)) # only high confidence water
+            .updateMask(d.eq(1)) #only high confidence water
             .updateMask(r.eq(1)) #no saturated pixels
             .updateMask(f.eq(0)) #no snow or clouds
             .updateMask(s.eq(0)) #no SR processing artefacts
-            .addBands(d1)
-            .addBands(clouds) #after masking, add clouds
+            .addBands(clouds) #add clouds
+            .addBands(dswe1) #add dswe1
             .addBands(dswe3)) #and add dswe3
             
   combinedReducer = (ee.Reducer.median().unweighted().forEachBand(pixOut.select(['med_Blue', 'med_Green', 'med_Red', 'med_Nir', 'med_Swir1', 'med_Swir2', 'med_SurfaceTemp', 'med_temp_qa']))
   .combine(ee.Reducer.min().unweighted().forEachBand(pixOut.select(['min_Blue', 'min_Green', 'min_Red', 'min_Nir', 'min_Swir1', 'min_Swir2', 'min_SurfaceTemp', 'min_temp_qa', 'min_cloud_dist'])), sharedInputs = False)
   .combine(ee.Reducer.max().unweighted().forEachBand(pixOut.select(['max_Blue', 'max_Green', 'max_Red', 'max_Nir', 'max_Swir1', 'max_Swir2', 'max_SurfaceTemp', 'max_temp_qa'])), sharedInputs = False)
-  .combine(ee.Reducer.percentile([25]).unweighted().forEachBand(pixOut.select(['Q1_Blue', 'Q1_Green', 'Q1_Red', 'Q1_Nir', 'Q1_Swir1', 'Q1_Swir2', 'Q1_SurfaceTemp'])), sharedInputs = False)
-  .combine(ee.Reducer.percentile([75]).unweighted().forEachBand(pixOut.select(['Q3_Blue', 'Q3_Green', 'Q3_Red', 'Q3_Nir', 'Q3_Swir1', 'Q3_Swir2', 'Q3_SurfaceTemp'])), sharedInputs = False)
+  #.combine(ee.Reducer.percentile([25]).unweighted().forEachBand(pixOut.select(['Q1_Blue', 'Q1_Green', 'Q1_Red', 'Q1_Nir', 'Q1_Swir1', 'Q1_Swir2', 'Q1_SurfaceTemp'])), sharedInputs = False)
+  #.combine(ee.Reducer.percentile([75]).unweighted().forEachBand(pixOut.select(['Q3_Blue', 'Q3_Green', 'Q3_Red', 'Q3_Nir', 'Q3_Swir1', 'Q3_Swir2', 'Q3_SurfaceTemp'])), sharedInputs = False)
   .combine(ee.Reducer.stdDev().unweighted().forEachBand(pixOut.select(['sd_Blue', 'sd_Green', 'sd_Red', 'sd_Nir', 'sd_Swir1', 'sd_Swir2', 'sd_SurfaceTemp', 'sd_temp_qa'])), sharedInputs = False)
   .combine(ee.Reducer.mean().unweighted().forEachBand(pixOut.select(['mean_Blue', 'mean_Green', 'mean_Red', 'mean_Nir', 'mean_Swir1', 'mean_Swir2', 'mean_SurfaceTemp', 'mean_temp_qa', 'mean_cloud_dist'])), sharedInputs = False)
-  .combine(ee.Reducer.count().unweighted().forEachBand(pixOut.select(['Blue', 'Green', 'Red', 'Nir', 'Swir1', 'Swir2','SurfaceTemp'])), outputPrefix = 'pCount_', sharedInputs = False)
-  .combine(ee.Reducer.sum().unweighted().forEachBand(pixOut.select(['dswe1', 'dswe3'])), outputPrefix = 'pCount_', sharedInputs = False)
+  .combine(ee.Reducer.count().unweighted().forEachBand(pixOut.select(['Blue', 'Green', 'Red', 'Nir', 'Swir1', 'Swir2','SurfaceTemp', 'dswe1', 'dswe3'])), outputPrefix = 'pCount_', sharedInputs = False)
+  #.combine(ee.Reducer.sum().unweighted().forEachBand(pixOut.select(['dswe1', 'dswe3'])), outputPrefix = 'pCount_', sharedInputs = False)
   .combine(ee.Reducer.kurtosis().unweighted().forEachBand(pixOut.select(['SurfaceTemp'])), outputPrefix = 'kurt_', sharedInputs = False)
   .combine(ee.Reducer.mean().unweighted().forEachBand(pixOut.select(['hillShadow', 'clouds'])), outputPrefix = 'prop_', sharedInputs = False))
   # Collect median reflectance and occurance values
@@ -545,8 +549,8 @@ for tiles in pr:
                                           selectors = ['med_Blue', 'med_Green', 'med_Red', 'med_Nir', 'med_Swir1', 'med_Swir2', 'med_SurfaceTemp', 'med_temp_qa',
                                           'min_Blue', 'min_Green', 'min_Red', 'min_Nir', 'min_Swir1', 'min_Swir2', 'min_SurfaceTemp', 'min_temp_qa',
                                           'max_Blue', 'max_Green', 'max_Red', 'max_Nir', 'max_Swir1', 'max_Swir2', 'max_SurfaceTemp', 'max_temp_qa',
-                                          'Q1_Blue', 'Q1_Green', 'Q1_Red', 'Q1_Nir', 'Q1_Swir1', 'Q1_Swir2', 'Q1_SurfaceTemp', 
-                                          'Q3_Blue', 'Q3_Green', 'Q3_Red', 'Q3_Nir', 'Q3_Swir1', 'Q3_Swir2', 'Q3_SurfaceTemp', 
+                                          #'Q1_Blue', 'Q1_Green', 'Q1_Red', 'Q1_Nir', 'Q1_Swir1', 'Q1_Swir2', 'Q1_SurfaceTemp', 
+                                          #'Q3_Blue', 'Q3_Green', 'Q3_Red', 'Q3_Nir', 'Q3_Swir1', 'Q3_Swir2', 'Q3_SurfaceTemp', 
                                           'sd_Blue', 'sd_Green', 'sd_Red', 'sd_Nir', 'sd_Swir1', 'sd_Swir2', 'sd_SurfaceTemp', 'sd_temp_qa',
                                           'pCount_Blue', 'pCount_Green', 'pCount_Red', 'pCount_Nir', 'pCount_Swir1', 'pCount_Swir2', 'pCount_SurfaceTemp',
                                           'kurt_SurfaceTemp','prop_clouds','prop_hillShadow','pCount_dswe1', 'pCount_dswe3','min_cloud_dist', 'mean_cloud_dist','system:index']))
@@ -583,8 +587,8 @@ for tiles in pr:
                                           selectors = ['med_Blue', 'med_Green', 'med_Red', 'med_Nir', 'med_Swir1', 'med_Swir2', 'med_SurfaceTemp', 'med_temp_qa',
                                           'min_Blue', 'min_Green', 'min_Red', 'min_Nir', 'min_Swir1', 'min_Swir2', 'min_SurfaceTemp', 'min_temp_qa',
                                           'max_Blue', 'max_Green', 'max_Red', 'max_Nir', 'max_Swir1', 'max_Swir2', 'max_SurfaceTemp', 'max_temp_qa',
-                                          'Q1_Blue', 'Q1_Green', 'Q1_Red', 'Q1_Nir', 'Q1_Swir1', 'Q1_Swir2', 'Q1_SurfaceTemp', 
-                                          'Q3_Blue', 'Q3_Green', 'Q3_Red', 'Q3_Nir', 'Q3_Swir1', 'Q3_Swir2', 'Q3_SurfaceTemp', 
+                                          #'Q1_Blue', 'Q1_Green', 'Q1_Red', 'Q1_Nir', 'Q1_Swir1', 'Q1_Swir2', 'Q1_SurfaceTemp', 
+                                          #'Q3_Blue', 'Q3_Green', 'Q3_Red', 'Q3_Nir', 'Q3_Swir1', 'Q3_Swir2', 'Q3_SurfaceTemp', 
                                           'sd_Blue', 'sd_Green', 'sd_Red', 'sd_Nir', 'sd_Swir1', 'sd_Swir2', 'sd_SurfaceTemp', 'sd_temp_qa',
                                           'pCount_Blue', 'pCount_Green', 'pCount_Red', 'pCount_Nir', 'pCount_Swir1', 'pCount_Swir2', 'pCount_SurfaceTemp',
                                           'kurt_SurfaceTemp','prop_clouds','prop_hillShadow','pCount_dswe1', 'pCount_dswe3','min_cloud_dist', 'mean_cloud_dist','system:index']))
