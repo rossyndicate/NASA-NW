@@ -10,7 +10,8 @@ library(nhdplusTools)
 library(tidyverse)
 library(sf)
 
-data_dir = '~/OneDrive - Colostate/NASA-Northern/'
+#make sure this ends with a slash!
+data_dir = 'data/spatialData/'
 ```
 
 ## *Purpose*
@@ -30,7 +31,7 @@ This code requires the user to run some terminal commands. You should be able to
 This step will set up and activate the Python virtual environment using `reticulate` and install the required Python packages. For a more literate version of pySetup, see the .Rmd file of the same name.
 
 ```{r}
-dir = getwd()
+py_env_dir = file.path(getwd(), 'landsat_stack/')
 source(file.path(dir, 'pySetup.R'))
 ```
 
@@ -69,16 +70,15 @@ ee.Initialize()
 #point to file - must contin the parameters Latitude, Longitude, comid, and name
 locs = read.csv(file.path(data_dir, 'misc/ReservoirLocations.csv'))
 
-#rename to required cols Latitude, Longitude, comid, name
+#rename to required cols Latitude, Longitude, id, name
 locs = locs %>% 
-  rename(name = NW_res,
-         comid = id)
+  rename(name = NW_res)
 
 #give this a short project name (for file naming conventions)
-proj = 'NASA-NW'
+proj = 'Northern'
 
 #and specify a folder name for the landsat stacks to get dumped into
-proj_folder = 'LandsatStacks'
+proj_folder = 'NASA-NW'
 ```
 
 ### **The remaining code will need to be run, but you won't have to alter any of the code below in order to output files to your Google Drive unless you want to change any of the settings of the tool.**
@@ -95,7 +95,7 @@ def csv_to_eeFeat(df):
   for i in range(df.shape[0]):
     x,y = df.Longitude[i],df.Latitude[i]
     latlong =[x,y]
-    loc_properties = {'system:index':str(df.comid[i]), 'name':df.name[i], 'comid':str(df.comid[i])}
+    loc_properties = {'system:index':str(df.id[i]), 'name':df.name[i], 'id':str(df.id[i])}
     g=ee.Geometry.Point(latlong) 
     feature = ee.Feature(g, loc_properties)
     features.append(feature)
@@ -179,6 +179,7 @@ def applyScaleFactors(image):
   opticalBands = image.select('SR_B.').multiply(0.0000275).add(-0.2)
   thermalBands = image.select('ST_B.*').multiply(0.00341802).add(149.0)
   return image.addBands(opticalBands, None, True).addBands(thermalBands, None,True)
+
 ```
 
 ```{python}
@@ -190,12 +191,12 @@ l9 = ee.ImageCollection('LANDSAT/LC09/C02/T1_L2')\
 
 # merge collections by image processing groups
 ls89 = ee.ImageCollection(l8.merge(l9)).filterBounds(wrs)  
-    
+
 # existing band names
 bn89 = ['SR_B1', 'SR_B2', 'SR_B3', 'SR_B4', 'SR_B5', 'SR_B6', 'SR_B7', 'QA_PIXEL', 'SR_QA_AEROSOL', 'QA_RADSAT', 'ST_B10', 'ST_QA', 'ST_CDIST']
 # new band names
 bns = ['Aerosol','Blue', 'Green', 'Red', 'Nir', 'Swir1', 'Swir2','pixel_qa', 'aerosol_qa', 'radsat_qa', 'SurfaceTemp', 'temp_qa', 'ST_CDIST']
- 
+
 # rename bands  
 ls89 = ls89.select(bn89, bns)
 
@@ -216,7 +217,7 @@ if len(pr) <= 5 :
 ## Buffer the lake sites
 def dpBuff(i):
   return i.buffer(90) #doing a 90m buffer for general use
-  
+
 ```
 
 #### addRadMask: bitmask for saturated SR pixels:
@@ -244,6 +245,7 @@ def cfMask(image):
     .where(qa.bitwiseAnd(1 << 4), ee.Image(4)) # cloud shadows value 4
     .where(qa.bitwiseAnd(1 << 5), ee.Image(5))) # snow value 5
   return image.addBands(cloudqa)
+
 ```
 
 #### srAerosol: grabbing qualitative measure of aerosol Level
@@ -253,6 +255,7 @@ def srAerosol(image):
   aerosolQA = image.select('aerosol_qa')
   medHighAero = aerosolQA.bitwiseAnd(1 << 7).rename('medHighAero')# pull out mask out where aeorosol is med and high
   return image.addBands(medHighAero)
+
 ```
 
 #### *Bandmath functions for Dswe:*
@@ -267,16 +270,13 @@ def Mndwi(image):
     'SWIR1': image.select(['Swir1'])
   }))
 
-
 # multi-band Spectral Relationship Visible
 def Mbsrv(image):
   return (image.select(['Green']).add(image.select(['Red'])).rename('mbsrv'))
 
-
 # Multi-band Spectral Relationship Near infrared
 def Mbsrn(image):
   return (image.select(['Nir']).add(image.select(['Swir1'])).rename('mbsrn'))
-
 
 # Normalized Difference Vegetation Index
 def Ndvi(image):
@@ -284,7 +284,6 @@ def Ndvi(image):
     'RED': image.select(['Red']),
     'NIR': image.select(['Nir'])
   }))
-
 
 # Automated Water Extent Shadow
 def Awesh(image):
@@ -294,7 +293,6 @@ def Awesh(image):
     'mbsrn': Mbsrn(image).select(['mbsrn']),
     'Swir2': image.select(['Swir2'])
   }))
-
 
 ```
 
@@ -406,7 +404,7 @@ def CalcHillShadows(image, geo):
 ## Remove geometries
 def removeGeo(i):
   return i.setGeometry(None)
-  
+
 ```
 
 #### ***RefPull89: Pulling all the working functions together:***
@@ -470,7 +468,7 @@ def RefPull89(image):
   lsout = (pixOut.reduceRegions(lakes, combinedReducer, 30))
   out = lsout.map(removeGeo)
   return out
-  
+
 ```
 
 #### *maximum_no_of_tasks: Function to monitor running jobs in Earth Engine*
@@ -550,8 +548,9 @@ for tiles in pr:
   counter = counter + 1
   done.append(tiles)
   print('done_' + str(counter) + '_' + str(tiles))
-  
+
 print('done')
+
 ```
 
 ### Run the Reflectance Pull for Missions 8&9 for whole lakes
@@ -587,8 +586,9 @@ for tiles in pr:
   counter = counter + 1
   done.append(tiles)
   print('done_' + str(counter) + '_' + str(tiles))
-  
+
 print('done')
+
 ```
 
 That's it! Your GEE tasks are now running [here](https://code.earthengine.google.com/tasks) and the output will show up in your Google Drive.

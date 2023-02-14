@@ -1,3 +1,7 @@
+#py environs
+*env/
+
+#R environs
 .Rproj.user
 .Rhistory
 .RData
